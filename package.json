@@ -1,0 +1,110 @@
+{
+  "name": "flutter-lens",
+  "displayName": "Flutter Lens",
+  "description": "Flutter Lens is a VSCode extension that provides deeper insights into the documentation of Flutter packages and widgets.",
+  "version": "0.3.3",
+  "publisher": "moinsen-dev",
+  "license": "MIT",
+  "author": {
+    "name": "Ulrich Diedrichsen",
+    "email": "uli@moinsen.dev"
+  },
+  "homepage": "https://github.com/moinsen-dev/flutter-lens",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/moinsen-dev/flutter-lens.git"
+  },
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onLanguage:yaml",
+    "onView:flutterLensExplorer"
+  ],
+  "main": "./out/extension.js",
+  "icon": "resources/flutter-lens-icon.png",
+  "contributes": {
+    "commands": [
+      {
+        "command": "flutter-lens.analyzePubspec",
+        "title": "Analyze Pubspec"
+      },
+      {
+        "command": "flutter-lens.askQuestion",
+        "title": "Open Flutter Documentation Search"
+      },
+      {
+        "command": "flutter-lens.updateDocumentation",
+        "title": "Update Flutter Documentation"
+      },
+      {
+        "command": "flutterLensExplorer.refreshEntry",
+        "title": "Refresh",
+        "icon": "$(refresh)"
+      }
+    ],
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "flutter-lens-sidebar",
+          "title": "Flutter Lens",
+          "icon": "resources/flutter-lens-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "flutter-lens-sidebar": [
+        {
+          "id": "flutterLensExplorer",
+          "name": "Flutter Lens Explorer"
+        }
+      ]
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "when": "resourceFilename == pubspec.yaml",
+          "command": "flutter-lens.analyzePubspec",
+          "group": "navigation"
+        }
+      ],
+      "view/title": [
+        {
+          "command": "flutterLensExplorer.refreshEntry",
+          "when": "view == flutterLensExplorer",
+          "group": "navigation"
+        }
+      ]
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "pnpm run compile",
+    "compile": "tsc -p ./",
+    "watch": "tsc -watch -p ./",
+    "pretest": "pnpm run compile && pnpm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test"
+  },
+  "devDependencies": {
+    "@types/cheerio": "^0.22.35",
+    "@types/js-yaml": "^4.0.9",
+    "@types/mocha": "^10.0.7",
+    "@types/node": "20.x",
+    "@types/node-fetch": "^2.6.11",
+    "@types/vscode": "^1.93.0",
+    "@typescript-eslint/eslint-plugin": "^8.3.0",
+    "@typescript-eslint/parser": "^8.3.0",
+    "@vscode/test-cli": "^0.0.10",
+    "@vscode/test-electron": "^2.4.1",
+    "eslint": "^9.9.1",
+    "typescript": "^5.5.4"
+  },
+  "dependencies": {
+    "cheerio": "^1.0.0",
+    "hnswlib-node": "^3.0.0",
+    "js-yaml": "^4.1.0"
+  }
+}
