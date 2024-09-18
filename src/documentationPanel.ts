@@ -1,7 +1,6 @@
-import * as fs from 'fs';
+import * as cheerio from 'cheerio';
+import fetch from 'node-fetch';
 import * as vscode from 'vscode';
-import { TfIdfVectorizer } from './tfIdfVectorizer.js';
-import { VectorDatabase } from './vectorDatabase.js';
 
 export class DocumentationPanel {
     public static currentPanel: DocumentationPanel | undefined;
@@ -10,49 +9,18 @@ export class DocumentationPanel {
 
     private constructor(
         panel: vscode.WebviewPanel,
-        private readonly vectorDb: VectorDatabase,
-        private readonly vectorizer: TfIdfVectorizer
+        private readonly extensionUri: vscode.Uri
     ) {
         this._panel = panel;
-        this._update();
         this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
-    }
 
-    public static createOrShow(extensionUri: vscode.Uri, vectorDb: VectorDatabase, vectorizer: TfIdfVectorizer) {
-        const column = vscode.window.activeTextEditor
-            ? vscode.window.activeTextEditor.viewColumn
-            : undefined;
-
-        if (DocumentationPanel.currentPanel) {
-            DocumentationPanel.currentPanel._panel.reveal(column);
-            return;
-        }
-
-        const panel = vscode.window.createWebviewPanel(
-            'flutterLensDocumentation',
-            'Flutter Lens Documentation',
-            column || vscode.ViewColumn.One,
-            {
-                enableScripts: true,
-                localResourceRoots: [vscode.Uri.joinPath(extensionUri, 'media')]
-            }
-        );
-
-        DocumentationPanel.currentPanel = new DocumentationPanel(panel, vectorDb, vectorizer);
-    }
-
-    private _update() {
-        const webviewContent = this._getHtmlForWebview();
-        this._panel.webview.html = webviewContent;
+        // Handle messages from the webview
         this._panel.webview.onDidReceiveMessage(
-            async message => {
+            message => {
                 switch (message.command) {
-                    case 'search':
-                        await this._handleSearch(message.text, message.count);
-                        break;
-                    case 'exportResults':
-                        await this._exportResults(message.results);
-                        break;
+                    case 'openExternal':
+                        vscode.env.openExternal(vscode.Uri.parse(message.url));
+                        return;
                 }
             },
             null,
@@ -60,238 +28,219 @@ export class DocumentationPanel {
         );
     }
 
-    private async _handleSearch(query: string, count: number) {
-        try {
-            this._panel.webview.postMessage({ command: 'startLoading' });
-            const questionVector = this.vectorizer.transform(query);
-            const results = await this.vectorDb.search(questionVector, count);
-            const similarQuestions = await this._getSimilarQuestions(query);
+    public static createOrShow(extensionUri: vscode.Uri, packageName: string) {
+        const column = vscode.window.activeTextEditor
+            ? vscode.window.activeTextEditor.viewColumn
+            : undefined;
 
-            if (results.length === 0) {
-                this._panel.webview.postMessage({
-                    command: 'showError',
-                    message: 'Keine Ergebnisse gefunden. Versuchen Sie, Ihre Frage umzuformulieren.'
-                });
-            } else {
-                this._panel.webview.postMessage({
-                    command: 'showResults',
-                    results,
-                    similarQuestions
-                });
-            }
-        } catch (error) {
-            this._panel.webview.postMessage({
-                command: 'showError',
-                message: `Fehler bei der Suche: ${(error as Error).message}`
-            });
+        if (DocumentationPanel.currentPanel) {
+            DocumentationPanel.currentPanel._panel.reveal(column);
+            DocumentationPanel.currentPanel._update(packageName);
+        } else {
+            const panel = vscode.window.createWebviewPanel(
+                'packageDocumentation',
+                'Package Documentation',
+                column || vscode.ViewColumn.One,
+                {
+                    enableScripts: true,
+                    localResourceRoots: [extensionUri]
+                }
+            );
+
+            DocumentationPanel.currentPanel = new DocumentationPanel(panel, extensionUri);
+            DocumentationPanel.currentPanel._update(packageName);
         }
     }
 
-    private async _getSimilarQuestions(query: string): Promise<string[]> {
-        const questionVector = this.vectorizer.transform(query);
-        const similarDocs = await this.vectorDb.search(questionVector, 5);
-        return similarDocs.map(doc => doc.split(' ').slice(0, 10).join(' ') + '...');
+    private async _update(packageName: string) {
+        this._panel.title = `${packageName} Documentation`;
+        this._panel.webview.html = await this._getHtmlForWebview(packageName);
+
+        // Send the current theme to the webview
+        this._panel.webview.postMessage({
+            type: 'vscode-theme-changed',
+            theme: vscode.window.activeColorTheme.kind === vscode.ColorThemeKind.Dark ? 'dark' : 'light'
+        });
+
+        // Listen for theme changes
+        vscode.window.onDidChangeActiveColorTheme(theme => {
+            this._panel.webview.postMessage({
+                type: 'vscode-theme-changed',
+                theme: theme.kind === vscode.ColorThemeKind.Dark ? 'dark' : 'light'
+            });
+        });
     }
 
-    private _getHtmlForWebview() {
-        return `
-            <!DOCTYPE html>
+    private async _getHtmlForWebview(packageName: string): Promise<string> {
+        const documentation = await this._fetchDocumentation(packageName);
+        return `<!DOCTYPE html>
             <html lang="en">
             <head>
                 <meta charset="UTF-8">
                 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>Flutter Lens Documentation</title>
+                <title>${packageName} Documentation</title>
                 <style>
+                    :root {
+                        --background-color: #ffffff;
+                        --text-color: #333333;
+                        --link-color: #0175C2;
+                        --code-background: #f4f4f4;
+                        --border-color: #e0e0e0;
+                    }
+                    @media (prefers-color-scheme: dark) {
+                        :root {
+                            --background-color: #1e1e1e;
+                            --text-color: #d4d4d4;
+                            --link-color: #4dc9ff;
+                            --code-background: #2a2a2a;
+                            --border-color: #505050;
+                        }
+                    }
                     body {
                         font-family: Arial, sans-serif;
                         line-height: 1.6;
-                        color: #333;
+                        color: var(--text-color);
+                        background-color: var(--background-color);
                         max-width: 800px;
                         margin: 0 auto;
                         padding: 20px;
                     }
-                    h1 {
-                        color: #0175C2;
+                    h1, h2 {
+                        color: var(--link-color);
                     }
-                    input[type="text"] {
-                        width: 70%;
-                        padding: 10px;
-                        margin-right: 10px;
-                    }
-                    button {
-                        padding: 10px 20px;
-                        background-color: #0175C2;
-                        color: white;
-                        border: none;
-                        cursor: pointer;
-                    }
-                    button:hover {
-                        background-color: #025a9a;
-                    }
-                    #results {
-                        margin-top: 20px;
-                    }
-                    .result {
-                        background-color: #f4f4f4;
-                        padding: 15px;
-                        margin-bottom: 15px;
-                        border-radius: 5px;
-                    }
-                    .result h2 {
-                        margin-top: 0;
-                        color: #0175C2;
-                    }
-                    .loader {
-                        border: 4px solid #f3f3f3;
-                        border-top: 4px solid #0175C2;
-                        border-radius: 50%;
-                        width: 40px;
-                        height: 40px;
-                        animation: spin 1s linear infinite;
-                        display: none;
-                        margin: 20px auto;
-                    }
-                    @keyframes spin {
-                        0% { transform: rotate(0deg); }
-                        100% { transform: rotate(360deg); }
-                    }
-                    .copy-button {
-                        background-color: #4CAF50;
-                        border: none;
-                        color: white;
-                        padding: 5px 10px;
-                        text-align: center;
+                    a {
+                        color: var(--link-color);
                         text-decoration: none;
-                        display: inline-block;
-                        font-size: 12px;
-                        margin: 4px 2px;
-                        cursor: pointer;
                     }
-                    select {
-                        padding: 5px 10px;
-                        margin-right: 10px;
+                    a:hover {
+                        text-decoration: underline;
                     }
-                    .error-message {
-                        color: #D32F2F;
-                        background-color: #FFCDD2;
+                    pre, code {
+                        background-color: var(--code-background);
                         padding: 10px;
                         border-radius: 5px;
-                        margin-top: 20px;
+                        overflow-x: auto;
                     }
-                    .result-content {
-                        max-height: 200px;
-                        overflow-y: auto;
-                        border: 1px solid #ddd;
-                        padding: 10px;
-                        margin-top: 10px;
+                    img {
+                        max-width: 100%;
+                        height: auto;
+                    }
+                    .accordion {
+                        background-color: var(--background-color);
+                        color: var(--text-color);
+                        cursor: pointer;
+                        padding: 18px;
+                        width: 100%;
+                        text-align: left;
+                        border: none;
+                        outline: none;
+                        transition: 0.4s;
+                        border-bottom: 1px solid var(--border-color);
+                    }
+                    .active, .accordion:hover {
+                        background-color: var(--code-background);
+                    }
+                    .panel {
+                        padding: 0 18px;
+                        background-color: var(--background-color);
+                        max-height: 0;
+                        overflow: hidden;
+                        transition: max-height 0.2s ease-out;
                     }
                 </style>
             </head>
             <body>
-                <h1>Flutter Lens Documentation</h1>
-                <input type="text" id="searchInput" placeholder="Stellen Sie eine Frage...">
-                <button id="searchButton">Suchen</button>
-                <select id="resultCount">
-                    <option value="3">3 Ergebnisse</option>
-                    <option value="5" selected>5 Ergebnisse</option>
-                    <option value="10">10 Ergebnisse</option>
-                </select>
-                <button id="exportButton" style="display: none;">Ergebnisse exportieren</button>
-                <div class="loader" id="loader"></div>
-                <div id="errorMessage" class="error-message" style="display: none;"></div>
-                <div id="similarQuestions" style="display: none;">
-                    <h3>Ähnliche Fragen:</h3>
-                    <ul id="similarQuestionsList"></ul>
-                </div>
-                <div id="results"></div>
+                ${documentation}
                 <script>
-                    const vscode = acquireVsCodeApi();
-                    const searchButton = document.getElementById('searchButton');
-                    const searchInput = document.getElementById('searchInput');
-                    const resultsDiv = document.getElementById('results');
-                    const loader = document.getElementById('loader');
-                    const resultCount = document.getElementById('resultCount');
-                    const errorMessage = document.getElementById('errorMessage');
-                    const exportButton = document.getElementById('exportButton');
-                    const similarQuestions = document.getElementById('similarQuestions');
-                    const similarQuestionsList = document.getElementById('similarQuestionsList');
+                    var acc = document.getElementsByClassName("accordion");
+                    var i;
 
-                    function search() {
-                        vscode.postMessage({ 
-                            command: 'search', 
-                            text: searchInput.value,
-                            count: parseInt(resultCount.value)
+                    for (i = 0; i < acc.length; i++) {
+                        acc[i].addEventListener("click", function() {
+                            this.classList.toggle("active");
+                            var panel = this.nextElementSibling;
+                            if (panel.style.maxHeight) {
+                                panel.style.maxHeight = null;
+                            } else {
+                                panel.style.maxHeight = panel.scrollHeight + "px";
+                            }
                         });
                     }
 
-                    searchButton.addEventListener('click', search);
-                    searchInput.addEventListener('keypress', (event) => {
-                        if (event.key === 'Enter') {
-                            search();
+                    // Listen for theme changes
+                    window.addEventListener('message', event => {
+                        if (event.data.type === 'vscode-theme-changed') {
+                            document.body.className = event.data.theme;
                         }
                     });
 
-                    exportButton.addEventListener('click', () => {
-                        vscode.postMessage({ command: 'exportResults' });
-                    });
-
-                    function copyToClipboard(text) {
-                        navigator.clipboard.writeText(text).then(() => {
-                            vscode.postMessage({ command: 'showInfo', text: 'In die Zwischenablage kopiert!' });
-                        }, (err) => {
-                            console.error('Konnte Text nicht kopieren: ', err);
-                        });
-                    }
-
-                    window.addEventListener('message', event => {
-                        const message = event.data;
-                        switch (message.command) {
-                            case 'startLoading':
-                                loader.style.display = 'block';
-                                resultsDiv.innerHTML = '';
-                                errorMessage.style.display = 'none';
-                                similarQuestions.style.display = 'none';
-                                exportButton.style.display = 'none';
-                                break;
-                            case 'showResults':
-                                loader.style.display = 'none';
-                                resultsDiv.innerHTML = message.results.map(
-                                    (result, index) => \`
-                                        <div class="result">
-                                            <h2>Ergebnis \${index + 1}</h2>
-                                            <div class="result-content">\${result}</div>
-                                            <button class="copy-button" onclick="copyToClipboard('\${result.replace(/'/g, "\\'")}')">Kopieren</button>
-                                        </div>
-                                    \`
-                                ).join('');
-                                exportButton.style.display = 'inline-block';
-                                similarQuestionsList.innerHTML = message.similarQuestions.map(
-                                    question => \`<li>\${question}</li>\`
-                                ).join('');
-                                similarQuestions.style.display = 'block';
-                                break;
-                            case 'showError':
-                                loader.style.display = 'none';
-                                errorMessage.textContent = message.message;
-                                errorMessage.style.display = 'block';
-                                break;
+                    // Handle external links
+                    document.addEventListener('click', (event) => {
+                        const target = event.target;
+                        if (target.tagName === 'A' && target.href) {
+                            event.preventDefault();
+                            vscode.postMessage({
+                                command: 'openExternal',
+                                url: target.href
+                            });
                         }
                     });
                 </script>
             </body>
-            </html>
-        `;
+            </html>`;
     }
 
-    private async _exportResults(results: string[]) {
-        const exportPath = await vscode.window.showSaveDialog({
-            filters: { 'Text Files': ['txt'] }
-        });
+    private async _fetchDocumentation(packageName: string): Promise<string> {
+        try {
+            const response = await fetch(`https://pub.dev/packages/${packageName}`);
+            const html = await response.text();
+            const $ = cheerio.load(html);
 
-        if (exportPath) {
-            const content = results.join('\n\n---\n\n');
-            fs.writeFileSync(exportPath.fsPath, content);
-            vscode.window.showInformationMessage(`Ergebnisse wurden nach ${exportPath.fsPath} exportiert.`);
+            let documentation = '';
+
+            // Extract package name and version
+            const name = $('h1.title').text().trim();
+            const version = $('.package-header__version').text().trim();
+            documentation += `<h1>${name} (${version})</h1>`;
+
+            // Extract links
+            const githubLink = $('a.link--github').attr('href') || '';
+            const pubDevLink = `https://pub.dev/packages/${packageName}`;
+
+            documentation += `<p>`;
+            if (githubLink) {
+                documentation += `<a href="${githubLink}" target="_blank">GitHub Repository</a> | `;
+            }
+            documentation += `<a href="${pubDevLink}" target="_blank">pub.dev Page</a>`;
+            documentation += `</p>`;
+
+            // Extract package description
+            const description = $('.package-description').text().trim();
+            documentation += `<button class="accordion">Description</button>
+            <div class="panel">
+                <p>${description}</p>
+            </div>`;
+
+            // Extract README content
+            const readme = $('.markdown-body').html() || '';
+            documentation += `<button class="accordion">README</button>
+            <div class="panel">
+                ${readme}
+            </div>`;
+
+            // Extract API documentation link
+            const apiDocLink = $('a:contains("API reference")').attr('href');
+            if (apiDocLink) {
+                documentation += `<button class="accordion">API Documentation</button>
+                <div class="panel">
+                    <a href="${apiDocLink}" target="_blank">View Full API Documentation</a>
+                </div>`;
+            }
+
+            return documentation;
+        } catch (error) {
+            console.error(`Error fetching documentation for ${packageName}:`, error);
+            return `<p>Error fetching documentation for ${packageName}. Please try again later.</p>`;
         }
     }
 

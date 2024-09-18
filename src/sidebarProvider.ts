@@ -2,35 +2,69 @@ import * as fs from 'fs';
 import * as yaml from 'js-yaml';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { DocumentationPanel } from './documentationPanel';
 
 class PubspecItem extends vscode.TreeItem {
     constructor(
         public readonly label: string,
         public readonly collapsibleState: vscode.TreeItemCollapsibleState,
         public readonly pubspecInfo?: any,
-        public readonly contextValue?: string
+        public readonly contextValue?: string,
+        public readonly resourceUri?: vscode.Uri
     ) {
         super(label, collapsibleState);
         this.contextValue = contextValue;
+        this.resourceUri = resourceUri;
     }
 }
 
 export class SidebarProvider implements vscode.TreeDataProvider<PubspecItem> {
     private _onDidChangeTreeData: vscode.EventEmitter<PubspecItem | undefined | null | void> = new vscode.EventEmitter<PubspecItem | undefined | null | void>();
     readonly onDidChangeTreeData: vscode.Event<PubspecItem | undefined | null | void> = this._onDidChangeTreeData.event;
+    private searchQuery: string = '';
 
-    constructor(private context: vscode.ExtensionContext) { }
+    constructor(private context: vscode.ExtensionContext) {
+        this.context.subscriptions.push(
+            vscode.commands.registerCommand('flutterLensExplorer.openPubspecFile', (filePath) => this.openPubspecFile(filePath)),
+            vscode.commands.registerCommand('flutterLensExplorer.showPackageDocumentation', (packageName) => this.showPackageDocumentation(packageName)),
+            vscode.commands.registerCommand('flutterLensExplorer.refreshEntry', () => this.refresh()),
+            vscode.commands.registerCommand('flutterLensExplorer.searchDependencies', () => this.searchDependencies()),
+            vscode.commands.registerCommand('flutterLensExplorer.clearSearch', () => this.clearSearch())
+        );
+    }
 
     refresh(): void {
         this._onDidChangeTreeData.fire();
     }
 
     getTreeItem(element: PubspecItem): vscode.TreeItem {
+        if (element.contextValue === 'pubspecRoot') {
+            element.iconPath = new vscode.ThemeIcon('file-submodule');
+        } else if (element.contextValue === 'pubspec') {
+            element.command = {
+                command: 'flutterLensExplorer.openPubspecFile',
+                title: 'Open pubspec.yaml',
+                arguments: [element.resourceUri]
+            };
+        } else if (element.contextValue === 'dependency') {
+            element.command = {
+                command: 'flutterLensExplorer.showPackageDocumentation',
+                title: 'Show Package Documentation',
+                arguments: [element.label.split(':')[0].trim()]
+            };
+        }
         return element;
     }
 
     getChildren(element?: PubspecItem): Thenable<PubspecItem[]> {
         if (!element) {
+            return Promise.resolve([
+                new PubspecItem('Search', vscode.TreeItemCollapsibleState.None, undefined, 'search'),
+                new PubspecItem('Pubspec', vscode.TreeItemCollapsibleState.Collapsed, undefined, 'pubspecRoot')
+            ]);
+        }
+
+        if (element.contextValue === 'pubspecRoot') {
             return this.getPubspecFiles();
         }
 
@@ -38,8 +72,12 @@ export class SidebarProvider implements vscode.TreeDataProvider<PubspecItem> {
             return Promise.resolve(this.getPubspecDetails(element.pubspecInfo));
         }
 
-        if (element.contextValue === 'dependencies' || element.contextValue === 'devDependencies' || element.contextValue === 'flutter' || element.contextValue === 'nestedObject') {
-            return Promise.resolve(this.getObjectItems(element.pubspecInfo, element.contextValue));
+        if (element.contextValue === 'dependencies' || element.contextValue === 'devDependencies' || element.contextValue === 'nestedObject') {
+            let items = this.getObjectItems(element.pubspecInfo, element.contextValue);
+            if (this.searchQuery) {
+                items = items.filter(item => item.label.toLowerCase().includes(this.searchQuery.toLowerCase()));
+            }
+            return Promise.resolve(items);
         }
 
         return Promise.resolve([]);
@@ -48,9 +86,19 @@ export class SidebarProvider implements vscode.TreeDataProvider<PubspecItem> {
     private getObjectItems(obj: any, contextValue: string): PubspecItem[] {
         return Object.entries(obj).map(([key, value]) => {
             if (value !== null && typeof value === 'object') {
-                return new PubspecItem(key, vscode.TreeItemCollapsibleState.Collapsed, value, 'nestedObject');
+                return new PubspecItem(
+                    key,
+                    vscode.TreeItemCollapsibleState.Collapsed,
+                    value,
+                    'nestedObject'
+                );
             } else {
-                return new PubspecItem(`${key}: ${value}`, vscode.TreeItemCollapsibleState.None);
+                return new PubspecItem(
+                    `${key}: ${value}`,
+                    vscode.TreeItemCollapsibleState.None,
+                    undefined,
+                    'dependency'
+                );
             }
         });
     }
@@ -64,16 +112,17 @@ export class SidebarProvider implements vscode.TreeDataProvider<PubspecItem> {
         const pubspecItems: PubspecItem[] = [];
 
         for (const folder of workspaceFolders) {
-            const pubspecFiles = this.findPubspecFiles(folder.uri.fsPath);
+            const pubspecFiles = await this.findPubspecFiles(folder.uri.fsPath);
             for (const pubspecPath of pubspecFiles) {
-                const content = fs.readFileSync(pubspecPath, 'utf8');
+                const content = await fs.promises.readFile(pubspecPath, 'utf8');
                 const pubspec = yaml.load(content) as any;
-                const relativePath = path.relative(folder.uri.fsPath, pubspecPath);
+                const parentDir = path.basename(path.dirname(pubspecPath));
                 pubspecItems.push(new PubspecItem(
-                    relativePath,
+                    parentDir,
                     vscode.TreeItemCollapsibleState.Collapsed,
                     pubspec,
-                    'pubspec'
+                    'pubspec',
+                    vscode.Uri.file(pubspecPath)
                 ));
             }
         }
@@ -81,14 +130,14 @@ export class SidebarProvider implements vscode.TreeDataProvider<PubspecItem> {
         return pubspecItems;
     }
 
-    private findPubspecFiles(dir: string): string[] {
+    private async findPubspecFiles(dir: string): Promise<string[]> {
         let results: string[] = [];
         const ignoredDirs = new Set([
             'build', '.dart_tool', 'ios', 'android', 'linux', 'windows', 'macos', 'web',
             'node_modules', '.git', '.idea', '.vscode'
         ]);
 
-        const list = fs.readdirSync(dir);
+        const list = await fs.promises.readdir(dir);
 
         for (const file of list) {
             if (ignoredDirs.has(file)) {
@@ -96,10 +145,10 @@ export class SidebarProvider implements vscode.TreeDataProvider<PubspecItem> {
             }
 
             const filePath = path.join(dir, file);
-            const stat = fs.statSync(filePath);
+            const stat = await fs.promises.stat(filePath);
 
             if (stat.isDirectory()) {
-                results = results.concat(this.findPubspecFiles(filePath));
+                results = results.concat(await this.findPubspecFiles(filePath));
             } else if (file === 'pubspec.yaml') {
                 results.push(filePath);
             }
@@ -110,13 +159,39 @@ export class SidebarProvider implements vscode.TreeDataProvider<PubspecItem> {
 
     private getPubspecDetails(pubspec: any): PubspecItem[] {
         const details = [];
-        details.push(new PubspecItem(`Name: ${pubspec.name}`, vscode.TreeItemCollapsibleState.None));
-        details.push(new PubspecItem(`Version: ${pubspec.version}`, vscode.TreeItemCollapsibleState.None));
-        details.push(new PubspecItem('Dependencies', vscode.TreeItemCollapsibleState.Collapsed, pubspec.dependencies, 'dependencies'));
-        details.push(new PubspecItem('Dev Dependencies', vscode.TreeItemCollapsibleState.Collapsed, pubspec.dev_dependencies, 'devDependencies'));
-        if (pubspec.flutter) {
-            details.push(new PubspecItem('Flutter', vscode.TreeItemCollapsibleState.Collapsed, pubspec.flutter, 'flutter'));
+        for (const [key, value] of Object.entries(pubspec)) {
+            if (typeof value === 'object' && value !== null) {
+                details.push(new PubspecItem(key, vscode.TreeItemCollapsibleState.Collapsed, value, key));
+            } else {
+                details.push(new PubspecItem(`${key}: ${value}`, vscode.TreeItemCollapsibleState.None));
+            }
         }
         return details;
+    }
+
+    private openPubspecFile(fileUri: vscode.Uri) {
+        vscode.workspace.openTextDocument(fileUri).then(doc => {
+            vscode.window.showTextDocument(doc);
+        });
+    }
+
+    private showPackageDocumentation(packageName: string) {
+        DocumentationPanel.createOrShow(this.context.extensionUri, packageName);
+    }
+
+    private async searchDependencies() {
+        const query = await vscode.window.showInputBox({
+            placeHolder: "Search dependencies...",
+            prompt: "Enter a search term"
+        });
+        if (query !== undefined) {
+            this.searchQuery = query;
+            this.refresh();
+        }
+    }
+
+    private clearSearch() {
+        this.searchQuery = '';
+        this.refresh();
     }
 }

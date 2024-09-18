@@ -18,13 +18,14 @@ export function activate(context: vscode.ExtensionContext) {
 	vectorDb = new VectorDatabase(context);
 	vectorizer = new TfIdfVectorizer();
 
-	// Update this section:
+	// Create and register the sidebar provider
 	const sidebarProvider = new SidebarProvider(context);
 	vscode.window.registerTreeDataProvider('flutterLensExplorer', sidebarProvider);
 
-	context.subscriptions.push(
-		vscode.commands.registerCommand('flutterLensExplorer.refreshEntry', () => sidebarProvider.refresh())
-	);
+	// Remove this duplicate command registration
+	// context.subscriptions.push(
+	// 	vscode.commands.registerCommand('flutterLensExplorer.refreshEntry', () => sidebarProvider.refresh())
+	// );
 
 	let analyzeDisposable = vscode.commands.registerCommand('flutter-lens.analyzePubspec', async () => {
 		await analyzePubspec();
@@ -32,8 +33,11 @@ export function activate(context: vscode.ExtensionContext) {
 	});
 
 	let askDisposable = vscode.commands.registerCommand('flutter-lens.askQuestion', () => {
-		DocumentationPanel.createOrShow(context.extensionUri, vectorDb, vectorizer);
+		// We'll update this to open the documentation panel for a specific package
+		// For now, let's open it with a placeholder package name
+		DocumentationPanel.createOrShow(context.extensionUri, 'placeholder_package');
 	});
+
 	let updateDisposable = vscode.commands.registerCommand('flutter-lens.updateDocumentation', async () => {
 		await updateDocumentation(context);
 		updateSidebarPubspecInfo();
@@ -80,7 +84,7 @@ async function analyzePubspecContent(content: string) {
 	try {
 		const pubspec = yaml.load(content) as any;
 
-		if (pubspec && pubspec.dependencies) {
+		if (pubspec && pubspec.dependencies && typeof pubspec.dependencies === 'object') {
 			const dependencies = Object.keys(pubspec.dependencies);
 			vscode.window.showInformationMessage(`Found ${dependencies.length} dependencies in pubspec.yaml`);
 
