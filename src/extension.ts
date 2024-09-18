@@ -20,6 +20,8 @@ export function activate(context: vscode.ExtensionContext) {
 	const sidebarProvider = new SidebarProvider(context);
 	vscode.window.registerTreeDataProvider('flutterLensExplorer', sidebarProvider);
 
+	vectorizer = new TfIdfVectorizer();
+
 	let analyzeDisposable = vscode.commands.registerCommand('flutter-lens.analyzePubspec', async () => {
 		await analyzePubspec();
 		sidebarProvider.refresh();
@@ -96,26 +98,32 @@ async function analyzePubspecContent(content: string) {
 }
 
 async function analyzePubspec() {
-	const editor = vscode.window.activeTextEditor;
-	if (!editor) {
-		vscode.window.showErrorMessage('No active editor found');
+	if (!vectorizer) {
+		console.error('Vectorizer is not initialized');
 		return;
 	}
 
-	const document = editor.document;
-	if (path.basename(document.fileName) !== 'pubspec.yaml') {
-		vscode.window.showErrorMessage('This is not a pubspec.yaml file');
-		return;
+	const pubspecs = await database.getAllPubspecs();
+	for (const pubspec of pubspecs) {
+		const content = JSON.parse(pubspec.content);
+		if (content.dependencies) {
+			for (const [packageName, version] of Object.entries(content.dependencies)) {
+				try {
+					const documentation = await extractDocumentation(packageName);
+					vectorizer.addDocument(documentation);
+					await database.saveVector(packageName, vectorizer.transform(documentation));
+				} catch (error) {
+					console.error(`Error extracting documentation for ${packageName}:`, error);
+				}
+			}
+		}
 	}
-
-	const content = document.getText();
-	await analyzePubspecContent(content);
+	vectorizer.fit();
 }
 
-async function extractDocumentation(packageName: string) {
+async function extractDocumentation(packageName: string): Promise<string> {
 	try {
 		const html = await fetchHtml(`https://pub.dev/packages/${packageName}`);
-
 		const $ = cheerio.load(html);
 
 		const description = $('.package-description').text().trim();
@@ -126,23 +134,11 @@ async function extractDocumentation(packageName: string) {
 
 		vscode.window.showInformationMessage(`Extracted documentation for ${packageName}`);
 
-		const fullText = `${packageName} ${description} ${Object.values(sections).join(' ')}`;
-
-		vectorizer.addDocument(fullText);
-		vectorizer.fit();
-
-		const vector = vectorizer.transform(fullText);
-
-		if (vector.length !== 384) {
-			console.warn(`Warning: Vector dimension mismatch for ${packageName}. Expected 384, got ${vector.length}.`);
-			return;
-		}
-
-		await database.saveVector(packageName, vector);
-
+		return `${packageName} ${version} ${description} ${Object.values(sections).join(' ')}`;
 	} catch (error) {
 		console.error(`Error extracting documentation for ${packageName}:`, error);
 		vscode.window.showErrorMessage(`Error extracting documentation for ${packageName}: ${(error as Error).message}`);
+		throw error;
 	}
 }
 

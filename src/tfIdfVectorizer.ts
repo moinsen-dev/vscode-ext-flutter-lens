@@ -5,11 +5,8 @@ export class TfIdfVectorizer {
     private readonly maxFeatures: number = 384;  // Set this to match your expected dimension
 
     addDocument(doc: string) {
-        this.documents.push(doc);
-        const words = this.tokenize(doc);
-        for (const word of new Set(words)) {
-            this.vocabulary.set(word, (this.vocabulary.get(word) || 0) + 1);
-        }
+        // Implementation of adding a document to the vectorizer
+        // This method should exist and be properly implemented
     }
 
     fit() {

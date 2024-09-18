@@ -39,10 +39,9 @@ export class SidebarProvider implements vscode.TreeDataProvider<PubspecItem> {
             vscode.commands.registerCommand('flutterLensExplorer.openPubspecFile', (filePath) => this.openPubspecFile(filePath)),
             vscode.commands.registerCommand('flutterLensExplorer.showPackageDocumentation', (packageName) => this.showPackageDocumentation(packageName)),
             vscode.commands.registerCommand('flutterLensExplorer.refreshEntry', () => this.refresh()),
-            vscode.commands.registerCommand('flutterLensExplorer.searchDependencies', () => this.searchDependencies()),
-            vscode.commands.registerCommand('flutterLensExplorer.clearSearch', () => this.clearSearch()),
             vscode.commands.registerCommand('flutterLensExplorer.showPubspecOverview', (pubspecInfo) => this.showPubspecOverview(pubspecInfo)),
-            vscode.commands.registerCommand('flutterLensExplorer.showDependencyOverview', (dep, isDev, versions) => this.showDependencyOverview(dep, isDev, versions))
+            vscode.commands.registerCommand('flutterLensExplorer.showDependencyOverview', (dep, isDev, versions) => this.showDependencyOverview(dep, isDev, versions)),
+            vscode.commands.registerCommand('flutterLensExplorer.setSearchQuery', () => this.setSearchQuery())
         );
     }
 
@@ -69,7 +68,12 @@ export class SidebarProvider implements vscode.TreeDataProvider<PubspecItem> {
     }
 
     getTreeItem(element: PubspecItem): vscode.TreeItem {
-        console.log('SidebarProvider: getTreeItem called', element);
+        if (element.contextValue === 'search') {
+            element.command = {
+                command: 'flutterLensExplorer.setSearchQuery',
+                title: 'Set Search Query'
+            };
+        }
         return element;
     }
 
@@ -85,28 +89,32 @@ export class SidebarProvider implements vscode.TreeDataProvider<PubspecItem> {
                 ];
             }
 
+            // Apply search filter to all items
+            const filterItems = (items: PubspecItem[]) => {
+                if (this.searchQuery) {
+                    return items.filter(item => item.label.toLowerCase().includes(this.searchQuery.toLowerCase()));
+                }
+                return items;
+            };
+
             if (element.contextValue === 'pubspecRoot') {
-                return await this.getPubspecFiles();
+                return filterItems(await this.getPubspecFiles());
             }
 
             if (element.contextValue === 'pubspec') {
-                return this.getPubspecDetails(element.pubspecInfo);
+                return filterItems(this.getPubspecDetails(element.pubspecInfo));
             }
 
             if (element.contextValue === 'allDependencies') {
-                return await this.getAllDependencies();
+                return filterItems(await this.getAllDependencies());
             }
 
             if (element.contextValue === 'allDevDependencies') {
-                return await this.getAllDevDependencies();
+                return filterItems(await this.getAllDevDependencies());
             }
 
             if (element.contextValue === 'dependencies' || element.contextValue === 'devDependencies' || element.contextValue === 'nestedObject') {
-                let items = this.getObjectItems(element.pubspecInfo, element.contextValue);
-                if (this.searchQuery) {
-                    items = items.filter(item => item.label.toLowerCase().includes(this.searchQuery.toLowerCase()));
-                }
-                return items;
+                return filterItems(this.getObjectItems(element.pubspecInfo, element.contextValue));
             }
 
             return [];
@@ -288,22 +296,16 @@ export class SidebarProvider implements vscode.TreeDataProvider<PubspecItem> {
         return results;
     }
 
-    private async searchDependencies() {
-        console.log('SidebarProvider: searchDependencies called');
+    private async setSearchQuery() {
         const query = await vscode.window.showInputBox({
-            placeHolder: "Search dependencies...",
-            prompt: "Enter a search term"
+            placeHolder: "Filter dependencies...",
+            prompt: "Enter a search term",
+            value: this.searchQuery
         });
         if (query !== undefined) {
             this.searchQuery = query;
-            this.refresh();
+            this._onDidChangeTreeData.fire();
         }
-    }
-
-    private clearSearch() {
-        console.log('SidebarProvider: clearSearch called');
-        this.searchQuery = '';
-        this.refresh();
     }
 
     private async getAllDependencies(): Promise<PubspecItem[]> {
