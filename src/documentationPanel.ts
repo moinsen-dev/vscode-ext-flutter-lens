@@ -28,14 +28,14 @@ export class DocumentationPanel {
         );
     }
 
-    public static createOrShow(extensionUri: vscode.Uri, packageName: string) {
+    public static createOrShow(extensionUri: vscode.Uri, packageName: string, customContent?: string) {
         const column = vscode.window.activeTextEditor
             ? vscode.window.activeTextEditor.viewColumn
             : undefined;
 
         if (DocumentationPanel.currentPanel) {
             DocumentationPanel.currentPanel._panel.reveal(column);
-            DocumentationPanel.currentPanel._update(packageName);
+            DocumentationPanel.currentPanel._update(packageName, customContent);
         } else {
             const panel = vscode.window.createWebviewPanel(
                 'packageDocumentation',
@@ -48,13 +48,13 @@ export class DocumentationPanel {
             );
 
             DocumentationPanel.currentPanel = new DocumentationPanel(panel, extensionUri);
-            DocumentationPanel.currentPanel._update(packageName);
+            DocumentationPanel.currentPanel._update(packageName, customContent);
         }
     }
 
-    private async _update(packageName: string) {
+    private async _update(packageName: string, customContent?: string) {
         this._panel.title = `${packageName} Documentation`;
-        this._panel.webview.html = await this._getHtmlForWebview(packageName);
+        this._panel.webview.html = await this._getHtmlForWebview(packageName, customContent);
 
         // Send the current theme to the webview
         this._panel.webview.postMessage({
@@ -71,8 +71,8 @@ export class DocumentationPanel {
         });
     }
 
-    private async _getHtmlForWebview(packageName: string): Promise<string> {
-        const documentation = await this._fetchDocumentation(packageName);
+    private async _getHtmlForWebview(packageName: string, customContent?: string): Promise<string> {
+        const documentation = customContent || await this._fetchDocumentation(packageName);
         return `<!DOCTYPE html>
             <html lang="en">
             <head>

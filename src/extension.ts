@@ -8,17 +8,15 @@ import { Database } from './database';
 import { DocumentationPanel } from './documentationPanel';
 import { SidebarProvider } from './sidebarProvider';
 import { TfIdfVectorizer } from './tfIdfVectorizer';
+import { initializeLogging, log } from './utils/logging';
 
 let database: Database;
 let vectorizer: TfIdfVectorizer;
 
 export function activate(context: vscode.ExtensionContext) {
-	console.log('Flutter Lens is now active!');
+	initializeLogging(context);
+	log('Flutter Lens: Extension is now active!');
 
-	database = new Database(context);
-	vectorizer = new TfIdfVectorizer();
-
-	// Create and register the sidebar provider
 	const sidebarProvider = new SidebarProvider(context);
 	vscode.window.registerTreeDataProvider('flutterLensExplorer', sidebarProvider);
 
@@ -42,7 +40,14 @@ export function activate(context: vscode.ExtensionContext) {
 	scheduleDocumentationUpdate(context);
 
 	// Initial update of sidebar pubspec info
+	console.log('Flutter Lens: Initiating initial refresh');
 	sidebarProvider.refresh();
+
+	// Listen for workspace folder changes
+	vscode.workspace.onDidChangeWorkspaceFolders(() => {
+		console.log('Flutter Lens: Workspace folders changed, refreshing');
+		sidebarProvider.refresh();
+	});
 }
 
 function scheduleDocumentationUpdate(context: vscode.ExtensionContext) {

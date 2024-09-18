@@ -78,6 +78,16 @@
           "group": "navigation"
         }
       ]
+    },
+    "configuration": {
+      "title": "Flutter Lens",
+      "properties": {
+        "flutterLens.enableDebugLogging": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable debug logging for Flutter Lens"
+        }
+      }
     }
   },
   "scripts": {
